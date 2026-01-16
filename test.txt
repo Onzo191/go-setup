@@ -1,0 +1,1314 @@
+
+# Go Backend Boilerplate - Module-Based Architecture
+
+## Project Structure (Module-Based)
+
+```
+myapp/
+├── cmd/
+│   └── api/
+│       └── main.go                    # Application entry point
+├── internal/
+│   ├── core/                          # Core shared components
+│   │   ├── config/
+│   │   │   └── config.go
+│   │   ├── database/
+│   │   │   └── postgres.go
+│   │   ├── middleware/
+│   │   │   ├── auth.go
+│   │   │   ├── logger.go
+│   │   │   └── cors.go
+│   │   └── server/
+│   │       └── server.go              # HTTP server setup
+│   │
+│   ├── modules/                       # Feature modules
+│   │   ├── user/                      # User module
+│   │   │   ├── domain/
+│   │   │   │   ├── entity.go         # User entity
+│   │   │   │   └── dto.go            # DTOs (request/response)
+│   │   │   ├── repository/
+│   │   │   │   ├── interface.go      # Repository interface
+│   │   │   │   └── postgres.go       # Implementation
+│   │   │   ├── service/
+│   │   │   │   ├── interface.go      # Service interface
+│   │   │   │   └── service.go        # Business logic
+│   │   │   ├── handler/
+│   │   │   │   └── http.go           # HTTP handlers
+│   │   │   ├── routes.go             # Module routes
+│   │   │   └── module.go             # Module setup
+│   │   │
+│   │   ├── auth/                      # Auth module
+│   │   │   ├── domain/
+│   │   │   │   └── dto.go
+│   │   │   ├── service/
+│   │   │   │   ├── interface.go
+│   │   │   │   └── jwt.go
+│   │   │   ├── handler/
+│   │   │   │   └── http.go
+│   │   │   ├── routes.go
+│   │   │   └── module.go
+│   │   │
+│   │   └── product/                   # Product module (example)
+│   │       ├── domain/
+│   │       ├── repository/
+│   │       ├── service/
+│   │       ├── handler/
+│   │       ├── routes.go
+│   │       └── module.go
+│   │
+│   └── shared/                        # Shared utilities
+│       ├── logger/
+│       │   └── logger.go
+│       ├── validator/
+│       │   └── validator.go
+│       ├── response/
+│       │   └── response.go
+│       └── errors/
+│           └── errors.go
+├── migrations/
+│   ├── 001_create_users_table.sql
+│   └── 002_create_products_table.sql
+├── .env.example
+├── docker-compose.yml
+├── Dockerfile
+├── Makefile
+└── go.mod
+```
+
+## Setup & Dependencies
+
+```bash
+# Initialize
+mkdir myapp && cd myapp
+go mod init github.com/yourusername/myapp
+
+# Install dependencies
+go get -u github.com/gin-gonic/gin
+go get -u github.com/jmoiron/sqlx
+go get -u github.com/lib/pq
+go get -u github.com/joho/godotenv
+go get -u github.com/go-playground/validator/v10
+go get -u go.uber.org/zap
+go get -u github.com/golang-jwt/jwt/v5
+go get -u golang.org/x/crypto
+```
+
+---
+
+## Core Components
+
+### `cmd/api/main.go`
+
+```go
+package main
+
+import (
+    "log"
+    
+    "github.com/yourusername/myapp/internal/core/config"
+    "github.com/yourusername/myapp/internal/core/database"
+    "github.com/yourusername/myapp/internal/core/server"
+    "github.com/yourusername/myapp/internal/modules/auth"
+    "github.com/yourusername/myapp/internal/modules/user"
+    "github.com/yourusername/myapp/internal/modules/product"
+    "github.com/yourusername/myapp/internal/shared/logger"
+)
+
+func main() {
+    // Load config
+    cfg := config.Load()
+    
+    // Initialize logger
+    appLogger := logger.New(cfg.Env)
+    defer appLogger.Sync()
+    
+    // Connect to database
+    db, err := database.NewPostgres(cfg.DatabaseURL)
+    if err != nil {
+        log.Fatal("Failed to connect to database:", err)
+    }
+    defer db.Close()
+    
+    // Initialize modules
+    authModule := auth.NewModule(cfg, appLogger)
+    userModule := user.NewModule(db, appLogger, authModule.Service)
+    productModule := product.NewModule(db, appLogger)
+    
+    // Create server with modules
+    srv := server.New(cfg, appLogger)
+    srv.RegisterModules(
+        authModule,
+        userModule,
+        productModule,
+    )
+    
+    // Start server
+    srv.Start()
+}
+```
+
+### `internal/core/config/config.go`
+
+```go
+package config
+
+import (
+    "os"
+    "github.com/joho/godotenv"
+)
+
+type Config struct {
+    Env         string
+    Port        string
+    DatabaseURL string
+    JWTSecret   string
+}
+
+func Load() *Config {
+    godotenv.Load()
+    
+    return &Config{
+        Env:         getEnv("ENV", "development"),
+        Port:        getEnv("PORT", "8080"),
+        DatabaseURL: getEnv("DATABASE_URL", ""),
+        JWTSecret:   getEnv("JWT_SECRET", "your-secret-key"),
+    }
+}
+
+func getEnv(key, defaultValue string) string {
+    if value := os.Getenv(key); value != "" {
+        return value
+    }
+    return defaultValue
+}
+```
+
+### `internal/core/server/server.go`
+
+```go
+package server
+
+import (
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+    
+    "github.com/gin-gonic/gin"
+    "github.com/yourusername/myapp/internal/core/config"
+    "github.com/yourusername/myapp/internal/core/middleware"
+    "github.com/yourusername/myapp/internal/shared/logger"
+)
+
+// Module interface that all modules must implement
+type Module interface {
+    RegisterRoutes(router *gin.RouterGroup)
+    Name() string
+}
+
+type Server struct {
+    config  *config.Config
+    logger  *logger.Logger
+    router  *gin.Engine
+    modules []Module
+}
+
+func New(cfg *config.Config, log *logger.Logger) *Server {
+    if cfg.Env == "production" {
+        gin.SetMode(gin.ReleaseMode)
+    }
+    
+    router := gin.New()
+    router.Use(gin.Recovery())
+    router.Use(middleware.Logger(log))
+    router.Use(middleware.CORS())
+    
+    return &Server{
+        config:  cfg,
+        logger:  log,
+        router:  router,
+        modules: []Module{},
+    }
+}
+
+func (s *Server) RegisterModules(modules ...Module) {
+    // Health check
+    s.router.GET("/health", func(c *gin.Context) {
+        c.JSON(200, gin.H{"status": "ok"})
+    })
+    
+    // API v1 group
+    v1 := s.router.Group("/api/v1")
+    
+    // Register each module
+    for _, module := range modules {
+        s.logger.Info("Registering module", "name", module.Name())
+        module.RegisterRoutes(v1)
+        s.modules = append(s.modules, module)
+    }
+}
+
+func (s *Server) Start() {
+    srv := &http.Server{
+        Addr:         ":" + s.config.Port,
+        Handler:      s.router,
+        ReadTimeout:  10 * time.Second,
+        WriteTimeout: 10 * time.Second,
+        IdleTimeout:  120 * time.Second,
+    }
+    
+    // Start server
+    go func() {
+        s.logger.Info("Starting server", "port", s.config.Port, "env", s.config.Env)
+        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            s.logger.Fatal("Failed to start server", "error", err)
+        }
+    }()
+    
+    // Graceful shutdown
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    
+    s.logger.Info("Shutting down server...")
+    
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    if err := srv.Shutdown(ctx); err != nil {
+        s.logger.Fatal("Server forced to shutdown", "error", err)
+    }
+    
+    s.logger.Info("Server stopped")
+}
+```
+
+### `internal/core/middleware/auth.go`
+
+```go
+package middleware
+
+import (
+    "net/http"
+    "strings"
+    
+    "github.com/gin-gonic/gin"
+    "github.com/golang-jwt/jwt/v5"
+    "github.com/yourusername/myapp/internal/shared/response"
+)
+
+func Auth(jwtSecret string) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        authHeader := c.GetHeader("Authorization")
+        if authHeader == "" {
+            response.Error(c, http.StatusUnauthorized, "Authorization header required")
+            c.Abort()
+            return
+        }
+        
+        tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+        
+        token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+            return []byte(jwtSecret), nil
+        })
+        
+        if err != nil || !token.Valid {
+            response.Error(c, http.StatusUnauthorized, "Invalid token")
+            c.Abort()
+            return
+        }
+        
+        claims := token.Claims.(jwt.MapClaims)
+        c.Set("user_id", int64(claims["user_id"].(float64)))
+        
+        c.Next()
+    }
+}
+```
+
+### `internal/core/middleware/logger.go`
+
+```go
+package middleware
+
+import (
+    "time"
+    
+    "github.com/gin-gonic/gin"
+    "github.com/yourusername/myapp/internal/shared/logger"
+)
+
+func Logger(log *logger.Logger) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        start := time.Now()
+        path := c.Request.URL.Path
+        
+        c.Next()
+        
+        duration := time.Since(start)
+        
+        log.Info("HTTP Request",
+            "method", c.Request.Method,
+            "path", path,
+            "status", c.Writer.Status(),
+            "duration", duration,
+            "ip", c.ClientIP(),
+        )
+    }
+}
+```
+
+### `internal/core/middleware/cors.go`
+
+```go
+package middleware
+
+import (
+    "github.com/gin-gonic/gin"
+)
+
+func CORS() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+        c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+        c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        
+        if c.Request.Method == "OPTIONS" {
+            c.AbortWithStatus(204)
+            return
+        }
+        
+        c.Next()
+    }
+}
+```
+
+---
+
+## User Module
+
+### `internal/modules/user/module.go`
+
+```go
+package user
+
+import (
+    "github.com/gin-gonic/gin"
+    "github.com/jmoiron/sqlx"
+    "github.com/yourusername/myapp/internal/modules/user/handler"
+    "github.com/yourusername/myapp/internal/modules/user/repository"
+    "github.com/yourusername/myapp/internal/modules/user/service"
+    "github.com/yourusername/myapp/internal/shared/logger"
+)
+
+type Module struct {
+    handler *handler.Handler
+    logger  *logger.Logger
+}
+
+func NewModule(db *sqlx.DB, log *logger.Logger, authService interface{}) *Module {
+    repo := repository.NewPostgresRepository(db)
+    svc := service.NewService(repo, log)
+    h := handler.NewHandler(svc, log)
+    
+    return &Module{
+        handler: h,
+        logger:  log,
+    }
+}
+
+func (m *Module) RegisterRoutes(router *gin.RouterGroup) {
+    userGroup := router.Group("/users")
+    {
+        userGroup.POST("", m.handler.Create)
+        userGroup.GET("/:id", m.handler.GetByID)
+        userGroup.GET("", m.handler.List)
+        userGroup.PUT("/:id", m.handler.Update)
+        userGroup.DELETE("/:id", m.handler.Delete)
+    }
+}
+
+func (m *Module) Name() string {
+    return "user"
+}
+```
+
+### `internal/modules/user/domain/entity.go`
+
+```go
+package domain
+
+import "time"
+
+type User struct {
+    ID        int64     `json:"id" db:"id"`
+    Email     string    `json:"email" db:"email"`
+    Password  string    `json:"-" db:"password"`
+    Name      string    `json:"name" db:"name"`
+    CreatedAt time.Time `json:"created_at" db:"created_at"`
+    UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+}
+```
+
+### `internal/modules/user/domain/dto.go`
+
+```go
+package domain
+
+type CreateUserRequest struct {
+    Email    string `json:"email" validate:"required,email"`
+    Password string `json:"password" validate:"required,min=8"`
+    Name     string `json:"name" validate:"required,min=2"`
+}
+
+type UpdateUserRequest struct {
+    Name string `json:"name" validate:"required,min=2"`
+}
+
+type UserResponse struct {
+    ID    int64  `json:"id"`
+    Email string `json:"email"`
+    Name  string `json:"name"`
+}
+```
+
+### `internal/modules/user/repository/interface.go`
+
+```go
+package repository
+
+import (
+    "context"
+    "github.com/yourusername/myapp/internal/modules/user/domain"
+)
+
+type Repository interface {
+    Create(ctx context.Context, user *domain.User) error
+    GetByID(ctx context.Context, id int64) (*domain.User, error)
+    GetByEmail(ctx context.Context, email string) (*domain.User, error)
+    List(ctx context.Context, limit, offset int) ([]*domain.User, error)
+    Update(ctx context.Context, user *domain.User) error
+    Delete(ctx context.Context, id int64) error
+}
+```
+
+### `internal/modules/user/repository/postgres.go`
+
+```go
+package repository
+
+import (
+    "context"
+    "database/sql"
+    
+    "github.com/jmoiron/sqlx"
+    "github.com/yourusername/myapp/internal/modules/user/domain"
+    "github.com/yourusername/myapp/internal/shared/errors"
+)
+
+type postgresRepository struct {
+    db *sqlx.DB
+}
+
+func NewPostgresRepository(db *sqlx.DB) Repository {
+    return &postgresRepository{db: db}
+}
+
+func (r *postgresRepository) Create(ctx context.Context, user *domain.User) error {
+    query := `
+        INSERT INTO users (email, password, name)
+        VALUES ($1, $2, $3)
+        RETURNING id, created_at, updated_at
+    `
+    return r.db.QueryRowContext(ctx, query, user.Email, user.Password, user.Name).
+        Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+}
+
+func (r *postgresRepository) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+    var user domain.User
+    query := `SELECT * FROM users WHERE id = $1`
+    
+    err := r.db.GetContext(ctx, &user, query, id)
+    if err == sql.ErrNoRows {
+        return nil, errors.ErrNotFound
+    }
+    return &user, err
+}
+
+func (r *postgresRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
+    var user domain.User
+    query := `SELECT * FROM users WHERE email = $1`
+    
+    err := r.db.GetContext(ctx, &user, query, email)
+    if err == sql.ErrNoRows {
+        return nil, errors.ErrNotFound
+    }
+    return &user, err
+}
+
+func (r *postgresRepository) List(ctx context.Context, limit, offset int) ([]*domain.User, error) {
+    var users []*domain.User
+    query := `SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+    
+    err := r.db.SelectContext(ctx, &users, query, limit, offset)
+    return users, err
+}
+
+func (r *postgresRepository) Update(ctx context.Context, user *domain.User) error {
+    query := `
+        UPDATE users 
+        SET name = $1, updated_at = NOW()
+        WHERE id = $2
+    `
+    _, err := r.db.ExecContext(ctx, query, user.Name, user.ID)
+    return err
+}
+
+func (r *postgresRepository) Delete(ctx context.Context, id int64) error {
+    query := `DELETE FROM users WHERE id = $1`
+    _, err := r.db.ExecContext(ctx, query, id)
+    return err
+}
+```
+
+### `internal/modules/user/service/interface.go`
+
+```go
+package service
+
+import (
+    "context"
+    "github.com/yourusername/myapp/internal/modules/user/domain"
+)
+
+type Service interface {
+    Create(ctx context.Context, req *domain.CreateUserRequest) (*domain.User, error)
+    GetByID(ctx context.Context, id int64) (*domain.User, error)
+    List(ctx context.Context, page, pageSize int) ([]*domain.User, error)
+    Update(ctx context.Context, id int64, req *domain.UpdateUserRequest) error
+    Delete(ctx context.Context, id int64) error
+}
+```
+
+### `internal/modules/user/service/service.go`
+
+```go
+package service
+
+import (
+    "context"
+    "golang.org/x/crypto/bcrypt"
+    
+    "github.com/yourusername/myapp/internal/modules/user/domain"
+    "github.com/yourusername/myapp/internal/modules/user/repository"
+    "github.com/yourusername/myapp/internal/shared/errors"
+    "github.com/yourusername/myapp/internal/shared/logger"
+)
+
+type service struct {
+    repo   repository.Repository
+    logger *logger.Logger
+}
+
+func NewService(repo repository.Repository, log *logger.Logger) Service {
+    return &service{
+        repo:   repo,
+        logger: log,
+    }
+}
+
+func (s *service) Create(ctx context.Context, req *domain.CreateUserRequest) (*domain.User, error) {
+    // Check if user exists
+    existing, _ := s.repo.GetByEmail(ctx, req.Email)
+    if existing != nil {
+        return nil, errors.ErrAlreadyExists
+    }
+    
+    // Hash password
+    hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+    if err != nil {
+        return nil, err
+    }
+    
+    user := &domain.User{
+        Email:    req.Email,
+        Password: string(hashedPassword),
+        Name:     req.Name,
+    }
+    
+    if err := s.repo.Create(ctx, user); err != nil {
+        return nil, err
+    }
+    
+    return user, nil
+}
+
+func (s *service) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+    return s.repo.GetByID(ctx, id)
+}
+
+func (s *service) List(ctx context.Context, page, pageSize int) ([]*domain.User, error) {
+    offset := (page - 1) * pageSize
+    return s.repo.List(ctx, pageSize, offset)
+}
+
+func (s *service) Update(ctx context.Context, id int64, req *domain.UpdateUserRequest) error {
+    user, err := s.repo.GetByID(ctx, id)
+    if err != nil {
+        return err
+    }
+    
+    user.Name = req.Name
+    return s.repo.Update(ctx, user)
+}
+
+func (s *service) Delete(ctx context.Context, id int64) error {
+    return s.repo.Delete(ctx, id)
+}
+```
+
+### `internal/modules/user/handler/http.go`
+
+```go
+package handler
+
+import (
+    "net/http"
+    "strconv"
+    
+    "github.com/gin-gonic/gin"
+    "github.com/yourusername/myapp/internal/modules/user/domain"
+    "github.com/yourusername/myapp/internal/modules/user/service"
+    "github.com/yourusername/myapp/internal/shared/errors"
+    "github.com/yourusername/myapp/internal/shared/logger"
+    "github.com/yourusername/myapp/internal/shared/response"
+    "github.com/yourusername/myapp/internal/shared/validator"
+)
+
+type Handler struct {
+    service   service.Service
+    logger    *logger.Logger
+    validator *validator.Validator
+}
+
+func NewHandler(svc service.Service, log *logger.Logger) *Handler {
+    return &Handler{
+        service:   svc,
+        logger:    log,
+        validator: validator.New(),
+    }
+}
+
+func (h *Handler) Create(c *gin.Context) {
+    var req domain.CreateUserRequest
+    
+    if err := c.ShouldBindJSON(&req); err != nil {
+        response.Error(c, http.StatusBadRequest, "Invalid request body")
+        return
+    }
+    
+    if err := h.validator.Validate(&req); err != nil {
+        response.ValidationError(c, err)
+        return
+    }
+    
+    user, err := h.service.Create(c.Request.Context(), &req)
+    if err != nil {
+        if err == errors.ErrAlreadyExists {
+            response.Error(c, http.StatusConflict, "User already exists")
+            return
+        }
+        h.logger.Error("Failed to create user", "error", err)
+        response.Error(c, http.StatusInternalServerError, "Failed to create user")
+        return
+    }
+    
+    response.Success(c, http.StatusCreated, user)
+}
+
+func (h *Handler) GetByID(c *gin.Context) {
+    id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+    if err != nil {
+        response.Error(c, http.StatusBadRequest, "Invalid user ID")
+        return
+    }
+    
+    user, err := h.service.GetByID(c.Request.Context(), id)
+    if err != nil {
+        if err == errors.ErrNotFound {
+            response.Error(c, http.StatusNotFound, "User not found")
+            return
+        }
+        response.Error(c, http.StatusInternalServerError, "Failed to get user")
+        return
+    }
+    
+    response.Success(c, http.StatusOK, user)
+}
+
+func (h *Handler) List(c *gin.Context) {
+    page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+    pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+    
+    users, err := h.service.List(c.Request.Context(), page, pageSize)
+    if err != nil {
+        response.Error(c, http.StatusInternalServerError, "Failed to list users")
+        return
+    }
+    
+    response.Success(c, http.StatusOK, users)
+}
+
+func (h *Handler) Update(c *gin.Context) {
+    id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+    if err != nil {
+        response.Error(c, http.StatusBadRequest, "Invalid user ID")
+        return
+    }
+    
+    var req domain.UpdateUserRequest
+    if err := c.ShouldBindJSON(&req); err != nil {
+        response.Error(c, http.StatusBadRequest, "Invalid request body")
+        return
+    }
+    
+    if err := h.service.Update(c.Request.Context(), id, &req); err != nil {
+        if err == errors.ErrNotFound {
+            response.Error(c, http.StatusNotFound, "User not found")
+            return
+        }
+        response.Error(c, http.StatusInternalServerError, "Failed to update user")
+        return
+    }
+    
+    response.Success(c, http.StatusOK, gin.H{"message": "User updated successfully"})
+}
+
+func (h *Handler) Delete(c *gin.Context) {
+    id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+    if err != nil {
+        response.Error(c, http.StatusBadRequest, "Invalid user ID")
+        return
+    }
+    
+    if err := h.service.Delete(c.Request.Context(), id); err != nil {
+        response.Error(c, http.StatusInternalServerError, "Failed to delete user")
+        return
+    }
+    
+    response.Success(c, http.StatusOK, gin.H{"message": "User deleted successfully"})
+}
+```
+
+---
+
+## Auth Module
+
+### `internal/modules/auth/module.go`
+
+```go
+package auth
+
+import (
+    "github.com/gin-gonic/gin"
+    "github.com/yourusername/myapp/internal/core/config"
+    "github.com/yourusername/myapp/internal/modules/auth/handler"
+    "github.com/yourusername/myapp/internal/modules/auth/service"
+    "github.com/yourusername/myapp/internal/shared/logger"
+)
+
+type Module struct {
+    Service service.Service
+    handler *handler.Handler
+}
+
+func NewModule(cfg *config.Config, log *logger.Logger) *Module {
+    svc := service.NewJWTService(cfg.JWTSecret)
+    h := handler.NewHandler(svc, log)
+    
+    return &Module{
+        Service: svc,
+        handler: h,
+    }
+}
+
+func (m *Module) RegisterRoutes(router *gin.RouterGroup) {
+    authGroup := router.Group("/auth")
+    {
+        authGroup.POST("/login", m.handler.Login)
+        authGroup.POST("/register", m.handler.Register)
+    }
+}
+
+func (m *Module) Name() string {
+    return "auth"
+}
+```
+
+### `internal/modules/auth/service/interface.go`
+
+```go
+package service
+
+type Service interface {
+    GenerateToken(userID int64) (string, error)
+    ValidateToken(token string) (int64, error)
+}
+```
+
+### `internal/modules/auth/service/jwt.go`
+
+```go
+package service
+
+import (
+    "time"
+    
+    "github.com/golang-jwt/jwt/v5"
+)
+
+type jwtService struct {
+    secret string
+}
+
+func NewJWTService(secret string) Service {
+    return &jwtService{secret: secret}
+}
+
+func (s *jwtService) GenerateToken(userID int64) (string, error) {
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+        "user_id": userID,
+        "exp":     time.Now().Add(24 * time.Hour).Unix(),
+    })
+    
+    return token.SignedString([]byte(s.secret))
+}
+
+func (s *jwtService) ValidateToken(tokenString string) (int64, error) {
+    token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+        return []byte(s.secret), nil
+    })
+    
+    if err != nil || !token.Valid {
+        return 0, err
+    }
+    
+    claims := token.Claims.(jwt.MapClaims)
+    return int64(claims["user_id"].(float64)), nil
+}
+```
+
+---
+
+## Product Module (Example)
+
+### `internal/modules/product/module.go`
+
+```go
+package product
+
+import (
+    "github.com/gin-gonic/gin"
+    "github.com/jmoiron/sqlx"
+    "github.com/yourusername/myapp/internal/modules/product/handler"
+    "github.com/yourusername/myapp/internal/modules/product/repository"
+    "github.com/yourusername/myapp/internal/modules/product/service"
+    "github.com/yourusername/myapp/internal/shared/logger"
+)
+
+type Module struct {
+    handler *handler.Handler
+}
+
+func NewModule(db *sqlx.DB, log *logger.Logger) *Module {
+    repo := repository.NewPostgresRepository(db)
+    svc := service.NewService(repo, log)
+    h := handler.NewHandler(svc, log)
+    
+    return &Module{handler: h}
+}
+
+func (m *Module) RegisterRoutes(router *gin.RouterGroup) {
+    productGroup := router.Group("/products")
+    {
+        productGroup.POST("", m.handler.Create)
+        productGroup.GET("/:id", m.handler.GetByID)
+        productGroup.GET("", m.handler.List)
+        productGroup.PUT("/:id", m.handler.Update)
+        productGroup.DELETE("/:id", m.handler.Delete)
+    }
+}
+
+func (m *Module) Name() string {
+    return "product"
+}
+```
+
+---
+
+## Shared Components
+
+### `internal/shared/errors/errors.go`
+
+```go
+package errors
+
+import "errors"
+
+var (
+    ErrNotFound       = errors.New("resource not found")
+    ErrAlreadyExists  = errors.New("resource already exists")
+    ErrUnauthorized   = errors.New("unauthorized")
+    ErrInvalidInput   = errors.New("invalid input")
+)
+```
+
+### `internal/shared/response/response.go`
+
+```go
+package response
+
+import (
+    "github.com/gin-gonic/gin"
+    "github.com/go-playground/validator/v10"
+)
+
+type Response struct {
+    Success bool        `json:"success"`
+    Message string      `json:"message,omitempty"`
+    Data    interface{} `json:"data,omitempty"`
+    Errors  interface{} `json:"errors,omitempty"`
+}
+
+func Success(c *gin.Context, status int, data interface{}) {
+    c.JSON(status, Response{
+        Success: true,
+        Data:    data,
+    })
+}
+
+func Error(c *gin.Context, status int, message string) {
+    c.JSON(status, Response{
+        Success: false,
+        Message: message,
+    })
+}
+
+func ValidationError(c *gin.Context, err error) {
+    var errors []string
+    
+    for _, err := range err.(validator.ValidationErrors) {
+        errors = append(errors, err.Field()+" "+err.Tag())
+    }
+    
+    c.JSON(400, Response{
+        Success: false,
+        Message: "Validation failed",
+        Errors:  errors,
+    })
+}
+```
+
+### `internal/shared/logger/logger.go`
+
+```go
+package logger
+
+import (
+    "go.uber.org/zap"
+    "go.uber.org/zap/zapcore"
+)
+
+type Logger struct {
+    *zap.SugaredLogger
+}
+
+func New(env string) *Logger {
+    var config zap.Config
+    
+    if env == "production" {
+        config = zap.NewProductionConfig()
+    } else {
+        config = zap.NewDevelopmentConfig()
+        config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+    }
+    
+    logger, _ := config.Build()
+    return &Logger{logger.Sugar()}
+}
+```
+
+### `internal/shared/validator/validator.go`
+
+```go
+package validator
+
+import (
+    "github.com/go-playground/validator/v10"
+)
+
+type Validator struct {
+    validate *validator.Validate
+}
+
+func New() *Validator {
+    return &Validator{
+        validate: validator.New(),
+    }
+}
+
+func (v *Validator) Validate(i interface{}) error {
+    return v.validate.Struct(i)
+}
+```
+
+### `internal/core/database/postgres.go`
+
+```go
+package database
+
+import (
+    "github.com/jmoiron/sqlx"
+    _ "github.com/lib/pq"
+)
+
+func NewPostgres(connectionString string) (*sqlx.DB, error) {
+    db, err := sqlx.Connect("postgres", connectionString)
+    if err != nil {
+        return nil, err
+    }
+    
+    db.SetMaxOpenConns(25)
+    db.SetMaxIdleConns(5)
+    
+    if err := db.Ping(); err != nil {
+        return nil, err
+    }
+    
+    return db, nil
+}
+```
+
+---
+
+## Migrations
+
+### `migrations/001_create_users_table.sql`
+
+```sql
+-- +migrate Up
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_users_email ON users(email);
+
+-- +migrate Down
+DROP TABLE IF EXISTS users;
+```
+
+### `migrations/002_create_products_table.sql`
+
+```sql
+-- +migrate Up
+CREATE TABLE IF NOT EXISTS products (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    price DECIMAL(10,2) NOT NULL,
+    stock INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- +migrate Down
+DROP TABLE IF EXISTS products;
+```
+
+---
+
+## Configuration Files
+
+### `.env.example`
+
+```env
+ENV=development
+PORT=8080
+DATABASE_URL=postgres://user:password@localhost:5432/myapp?sslmode=disable
+JWT_SECRET=your-super-secret-jwt-key-change-this
+```
+
+### `docker-compose.yml`
+
+```yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: myapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://user:password@postgres:5432/myapp?sslmode=disable
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
+```
+
+### `Dockerfile`
+
+```dockerfile
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/api
+
+FROM alpine:latest
+
+WORKDIR /root/
+
+COPY --from=builder /app/main .
+COPY --from=builder /app/.env .
+
+EXPOSE 8080
+
+CMD ["./main"]
+```
+
+### `Makefile`
+
+```makefile
+.PHONY: run build test docker-up docker-down migrate-up migrate-down new-module
+
+run:
+	go run cmd/api/main.go
+
+build:
+	go build -o bin/api cmd/api/main.go
+
+test:
+	go test -v ./...
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
+
+migrate-up:
+	migrate -path migrations -database "$(DATABASE_URL)" up
+
+migrate-down:
+	migrate -path migrations -database "$(DATABASE_URL)" down
+
+# Create new module
+new-module:
+	@read -p "Module name: " name; \
+	mkdir -p internal/modules/$name/{domain,repository,service,handler}; \
+	echo "Module $name created!"
+
+.DEFAULT_GOAL := run
+```
+
+---
+
+## Quick Start
+
+```bash
+# 1. Setup
+cp .env.example .env
+
+# 2. Start database
+make docker-up
+
+# 3. Run migrations
+make migrate-up
+
+# 4. Start server
+make run
+
+# 5. Create new module
+make new-module
+# Enter module name: "order"
+```
+
+## Add New Module (Ví dụ: Order Module)
+
+```bash
+# 1. Create module structure
+make new-module
+# Enter: order
+
+# 2. Copy template từ user module
+# 3. Customize theo business logic của bạn
+# 4. Register trong cmd/api/main.go:
+
+orderModule := order.NewModule(db, logger)
+srv.RegisterModules(
+    authModule,
+    userModule,
+    productModule,
+    orderModule, // Add new module here
+)
+```
+
+## Module Benefits
+
+✅ **Độc lập hoàn toàn** - Mỗi module có domain/repo/service/handler riêng
+✅ **Dễ test** - Test từng module riêng biệt
+✅ **Scalable** - Thêm module mới không ảnh hưởng code cũ
+✅ **Team-friendly** - Nhiều người làm nhiều module song song
+✅ **Clear boundaries** - Ranh giới rõ ràng giữa các module
+✅ **Reusable** - Module có thể tái sử dụng cho project khác
+✅ **Microservices ready** - Dễ tách thành microservices sau này
+
+## API Examples
+
+```bash
+# Register user
+curl -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"password123","name":"John"}'
+
+# Login
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"password123"}'
+
+# Get user
+curl http://localhost:8080/api/v1/users/1
+
+# List users
+curl http://localhost:8080/api/v1/users?page=1&page_size=10
+```
+
+Đây là kiến trúc module-based chuẩn, mỗi module độc lập và dễ mở rộng!

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
 	config "go-setup/internal/core/config"
 )
@@ -57,8 +59,13 @@ func (s *Server) DefaultRoutes() {
 	})
 }
 
+func (s *Server) SwaggerDocs() {
+	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+}
+
 func (s *Server) RegisterModules(modules ...Module) {
 	s.DefaultRoutes()
+	s.SwaggerDocs()
 
 	// API version group
 	v1 := s.router.Group("/api/v1")
