@@ -40,7 +40,7 @@ func New(cfg *config.Config) *Server {
 	}
 }
 
-func (s *Server) RegisterModules(modules ...Module) {
+func (s *Server) DefaultRoutes() {
 	s.router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
@@ -55,6 +55,10 @@ func (s *Server) RegisterModules(modules ...Module) {
 	s.router.NoRoute(func(c *gin.Context) {
 		c.HTML(404, "not-found.html", gin.H{"error": "Not Found"})
 	})
+}
+
+func (s *Server) RegisterModules(modules ...Module) {
+	s.DefaultRoutes()
 
 	// API version group
 	v1 := s.router.Group("/api/v1")
