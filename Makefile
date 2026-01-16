@@ -1,3 +1,5 @@
+include .env
+
 dev:
 	air
 
@@ -23,3 +25,17 @@ docker-infra-down:
 ## GENERATE API DOCUMENTATION
 swagger:
 	swag init -g cmd/api/main.go -d ./ --parseInternal
+
+
+## MIGRATE
+migrate:
+	atlas migrate diff $(NAME) --env local
+
+migrate-apply:
+	atlas migrate apply --env local --url "$(DB_MIGRATE)"
+
+migrate-status:
+	atlas migrate status --env local --url "$(DB_MIGRATE)"
+
+migrate-revert:
+	atlas migrate down --env local --url "$(DB_MIGRATE)" 1
