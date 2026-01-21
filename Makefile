@@ -28,14 +28,17 @@ swagger:
 
 
 ## MIGRATE
-migrate:
+migrate-generate:
 	atlas migrate diff $(NAME) --env local
 
-migrate-apply:
+migrate:
 	atlas migrate apply --env local --url "$(DB_MIGRATE)"
 
 migrate-status:
 	atlas migrate status --env local --url "$(DB_MIGRATE)"
 
-migrate-revert:
-	atlas migrate down --env local --url "$(DB_MIGRATE)" 1
+migrate-down:
+	atlas migrate down --env local --url "$(DB_MIGRATE)"
+
+migrate-clean:
+	atlas schema clean --env local --url "$(DB_MIGRATE)"

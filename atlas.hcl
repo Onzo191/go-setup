@@ -5,6 +5,7 @@ env "local" {
   migration {
     dir = "file://migrations"
     format = atlas
+    revisions_schema = "public"
   }
 }
 
