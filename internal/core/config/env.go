@@ -27,9 +27,10 @@ func GetEnv(key string, fallback string) string {
 }
 
 type Config struct {
-	Env  string
-	Port string
-	DB   DBConfig
+	Env      string
+	Port     string
+	DB       DBConfig
+	Security SecurityConfig
 }
 
 type DBConfig struct {
@@ -38,6 +39,12 @@ type DBConfig struct {
 	User     string
 	Password string
 	DBName   string
+}
+
+type SecurityConfig struct {
+	JwtSecret          string
+	RefreshTokenSecret string
+	PasswordHashSecret string
 }
 
 func LoadEnvConfig(path string) *Config {
@@ -52,6 +59,11 @@ func LoadEnvConfig(path string) *Config {
 			User:     GetEnv("DB_USER", "postgres"),
 			Password: GetEnv("DB_PASSWORD", "password"),
 			DBName:   GetEnv("DB_NAME", "mydb"),
+		},
+		Security: SecurityConfig{
+			JwtSecret:          GetEnv("JWT_SECRET", "default_jwt_secret"),
+			RefreshTokenSecret: GetEnv("REFRESH_TOKEN_SECRET", "default_refresh_token_secret"),
+			PasswordHashSecret: GetEnv("PASSWORD_HASH_SECRET", "default_password_hash_secret"),
 		},
 	}
 

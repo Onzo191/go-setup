@@ -26,7 +26,6 @@ docker-infra-down:
 swagger:
 	swag init -g cmd/api/main.go -d ./ --parseInternal
 
-
 ## MIGRATE
 migrate-generate:
 	atlas migrate diff $(NAME) --env local
@@ -42,3 +41,7 @@ migrate-down:
 
 migrate-clean:
 	atlas schema clean --env local --url "$(DB_MIGRATE)"
+
+## SEEDER
+seed:
+	go run cmd/seed/main.go
