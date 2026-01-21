@@ -8,15 +8,18 @@ import (
 	"ariga.io/atlas-provider-gorm/gormschema"
 	_ "ariga.io/atlas-provider-gorm/gormschema"
 
-	auth "go-setup/internal/modules/auth/domain"
-	user "go-setup/internal/modules/user/domain"
+	"go-setup/internal/core/database/models"
 )
 
 func main() {
 	stmts, err := gormschema.New("postgres").Load(
-		&auth.UserCredential{},
-		&auth.UserSession{},
-		&user.User{},
+		&models.User{},
+		&models.UserCredential{},
+		&models.UserSession{},
+		&models.Role{},
+		&models.Permission{},
+		&models.UserRole{},
+		&models.RolePermission{},
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load gorm schema: %v\n", err)

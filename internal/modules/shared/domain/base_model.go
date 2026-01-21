@@ -8,9 +8,13 @@ import (
 )
 
 type BaseModel struct {
-	ID        uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	ID        uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+	CreatedAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+	UpdatedAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+}
+
+type SoftDeleteModel struct {
+	BaseModel
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
