@@ -17,6 +17,8 @@ const (
 )
 
 type UserCredential struct {
+	model.Identity
+
 	UserID uuid.UUID `gorm:"type:uuid;not null;index"`
 
 	Type       CredentialType `gorm:"type:varchar(20);not null"`
@@ -24,5 +26,5 @@ type UserCredential struct {
 	SecretHash string         `gorm:"not null"`
 	VerifiedAt time.Time
 
-	model.BaseModel
+	model.Timestamps
 }

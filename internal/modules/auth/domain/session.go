@@ -9,6 +9,8 @@ import (
 )
 
 type UserSession struct {
+	model.Identity
+
 	UserID uuid.UUID `gorm:"type:uuid;not null;index"`
 
 	RefreshTokenHash string `gorm:"not null;uniqueIndex"`
@@ -19,5 +21,5 @@ type UserSession struct {
 	ExpiresAt time.Time
 	RevokedAt *time.Time
 
-	model.BaseModel
+	model.Timestamps
 }

@@ -5,8 +5,10 @@ import (
 )
 
 type Permission struct {
+	model.Identity
+
 	Key         string `gorm:"not null;uniqueIndex"`
 	Description string
 
-	model.BaseModel
+	model.Timestamps
 }

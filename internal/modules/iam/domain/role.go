@@ -5,8 +5,10 @@ import (
 )
 
 type Role struct {
+	model.Identity
+
 	Name        string `gorm:"not null;uniqueIndex"`
 	Description string
 
-	model.BaseModel
+	model.Timestamps
 }

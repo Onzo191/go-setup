@@ -1,8 +1,8 @@
 -- Create "permissions" table
 CREATE TABLE "permissions" (
+  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "key" text NOT NULL,
   "description" text NULL,
-  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "created_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id")
@@ -11,9 +11,9 @@ CREATE TABLE "permissions" (
 CREATE UNIQUE INDEX "idx_permissions_key" ON "permissions" ("key");
 -- Create "roles" table
 CREATE TABLE "roles" (
+  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "name" text NOT NULL,
   "description" text NULL,
-  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "created_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id")
@@ -30,11 +30,11 @@ CREATE TABLE "role_permissions" (
 );
 -- Create "users" table
 CREATE TABLE "users" (
+  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "email" text NOT NULL,
   "first_name" text NOT NULL,
   "last_name" text NOT NULL,
   "phone" text NOT NULL,
-  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "created_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "deleted_at" timestamptz NULL,
@@ -44,12 +44,12 @@ CREATE TABLE "users" (
 CREATE INDEX "idx_users_deleted_at" ON "users" ("deleted_at");
 -- Create "user_credentials" table
 CREATE TABLE "user_credentials" (
+  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "user_id" uuid NOT NULL,
   "type" character varying(20) NOT NULL,
   "identifier" text NOT NULL,
   "secret_hash" text NOT NULL,
   "verified_at" timestamptz NULL,
-  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "created_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id"),
@@ -69,13 +69,13 @@ CREATE TABLE "user_roles" (
 );
 -- Create "user_sessions" table
 CREATE TABLE "user_sessions" (
+  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "user_id" uuid NOT NULL,
   "refresh_token_hash" text NOT NULL,
   "user_agent" text NOT NULL,
   "ip_address" text NOT NULL,
   "expires_at" timestamptz NULL,
   "revoked_at" timestamptz NULL,
-  "id" uuid NOT NULL DEFAULT gen_random_uuid(),
   "created_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("id"),

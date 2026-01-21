@@ -5,10 +5,13 @@ import (
 )
 
 type User struct {
+	model.Identity
+
 	Email     string `gorm:"not null"`
 	FirstName string `gorm:"not null"`
 	LastName  string `gorm:"not null"`
 	Phone     string `gorm:"not null"`
 
-	model.SoftDeleteModel
+	model.Timestamps
+	model.SoftDelete
 }
